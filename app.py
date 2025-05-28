@@ -69,9 +69,6 @@ class RouteApp(QWidget):
         self.export_button.clicked.connect(self.export_route)
         left_panel.addWidget(self.export_button)
 
-        self.preview_all_button = QPushButton("Preview All Routes")
-        self.preview_all_button.clicked.connect(self.preview_all)
-        left_panel.addWidget(self.preview_all_button)
 
         self.status = QLabel("No routes loaded")
         left_panel.addWidget(self.status)
@@ -206,19 +203,39 @@ class RouteApp(QWidget):
             item.setText(new_name)
 
     def export_route(self):
-        item = self.route_list.currentItem()
-        if not item:
+        items = self.route_list.selectedItems()
+        if not items:
             return
-        base = item.text()
-        options = self.routes.get(base, [])
-        if not options:
+
+        # Ask user to select an export directory
+        dir_path = QFileDialog.getExistingDirectory(self, "Select Export Directory")
+        if not dir_path:
             return
-        idx = self.current_option_index.get(base, 0)
-        geojson = options[idx]
-        path, _ = QFileDialog.getSaveFileName(self, "Export GeoJSON", f"{base}.geojson", "GeoJSON Files (*.geojson)")
-        if path:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(geojson, f, ensure_ascii=False, indent=2)
+
+        exported = 0
+        for item in items:
+            base = item.text()
+            options = self.routes.get(base, [])
+            if not options:
+                continue
+            idx = self.current_option_index.get(base, 0)
+            geojson = options[idx]
+            # Record current route name into each feature’s properties
+            for feat in geojson.get("features", []):
+                feat["properties"] = feat.get("properties", {})
+                feat["properties"]["name"] = base
+
+            # Use route name for filename
+            filename = f"{base}.geojson"
+            file_path = os.path.join(dir_path, filename)
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump(geojson, f, ensure_ascii=False, indent=2)
+                exported += 1
+            except Exception as e:
+                QMessageBox.warning(self, "Export Error", f"Failed to export {filename}:\n{e}")
+
+        QMessageBox.information(self, "Export Complete", f"Exported {exported} route(s) to:\n{dir_path}")
 
     def choose_color(self):
         item = self.route_list.currentItem()
@@ -240,31 +257,6 @@ class RouteApp(QWidget):
                     feat["properties"]["color"] = hex_color
             self.display_route()
 
-    def preview_all(self):
-        # Show all currently selected options on one map
-        all_routes = []
-        for base, options in self.routes.items():
-            idx = self.current_option_index.get(base, 0)
-            geojson = options[idx]
-            feats = geojson.get("features", [])
-            if not feats:
-                continue
-            coords = feats[0]["geometry"]["coordinates"]
-            latlngs = [(c[1], c[0]) for c in coords]
-            color = feats[0].get("properties", {}).get("color", "blue")
-            all_routes.append((latlngs, color))
-
-        if not all_routes:
-            return
-
-        # initialize map at first route start
-        m = folium.Map(location=all_routes[0][0][0], zoom_start=12)
-        for latlngs, color in all_routes:
-            folium.PolyLine(latlngs, color=color, weight=4).add_to(m)
-
-        output_file = "map_preview_all.html"
-        m.save(output_file)
-        self.web_view.load(QUrl.fromLocalFile(os.path.abspath(output_file)))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
