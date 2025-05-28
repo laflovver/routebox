@@ -1,0 +1,2 @@
+folium>=0.14.0
+tkinterweb>=3.22.0
