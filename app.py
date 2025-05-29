@@ -13,32 +13,13 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtCore import QUrl, Qt, QPoint
-from PyQt5.QtCore import QPropertyAnimation, QSize
+
 
 class CircleButton(QPushButton):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # fixed dot size
         self.setFixedSize(20, 20)
-        # base style, background set by caller
         self.setStyleSheet("border-radius: 10px; font-size:10pt; color:white;")
-        # size animation
-        self._anim = QPropertyAnimation(self, b"size")
-        self._anim.setDuration(120)
-
-    def enterEvent(self, ev):
-        self._anim.stop()
-        self._anim.setStartValue(self.size())
-        self._anim.setEndValue(QSize(24, 24))
-        self._anim.start()
-        super().enterEvent(ev)
-
-    def leaveEvent(self, ev):
-        self._anim.stop()
-        self._anim.setStartValue(self.size())
-        self._anim.setEndValue(QSize(20, 20))
-        self._anim.start()
-        super().leaveEvent(ev)
 
 from logic import extract_route
 
@@ -78,26 +59,35 @@ class RouteApp(QWidget):
         # Route list slots
         self.route_list = QListWidget()
         self.route_list.setSpacing(4)
-        self.route_list.setStyleSheet(
-            "QListWidget { padding: 4px; }"
-            "QListWidget::item {"
-            "  margin: 2px 0;"
-            "  height: 32px;"
-            "  font-size: 14pt;"
-            "  border-radius: 4px;"
-            "}"
-            "QListWidget::item:hover {"
-            "  background-color: #E5E5EA;"
-            "}"
-            "QListWidget::item:pressed {"
-            "  background-color: #C7C7CC;"
-            "}"
-            "QListWidget::item:selected {"
-            "  background-color: #007AFF;"
-            "  color: white;"
-            "}"
-        )
+        self.route_list.setStyleSheet("""
+            QListWidget {
+                padding: 4px;
+                border: none;
+            }
+            QListWidget::item {
+                margin: 2px 0;
+                height: 32px;
+                font-size: 14pt;
+                border-radius: 6px;
+                background-color: transparent;
+            }
+            QListWidget::item:hover {
+                background-color: #E5E5EA;
+            }
+            QListWidget::item:selected {
+                background-color: #007AFF;
+                color: white;
+            }
+            QListWidget::item:focus {
+                outline: none;
+            }
+            QListWidget::item:!selected:!hover {
+                background-color: transparent;
+            }
+        """)
+        self.route_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.route_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.route_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.route_list.itemSelectionChanged.connect(self.display_route)
         self.route_list.itemDoubleClicked.connect(self.rename_route)
         self.route_list.itemActivated.connect(self.rename_route)
@@ -165,18 +155,20 @@ class RouteApp(QWidget):
             widget = QWidget()
             widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             hl = QHBoxLayout(widget)
-            hl.setContentsMargins(2,2,2,2)
-            hl.setSpacing(4)
-            lbl = QLabel(base)
-            lbl.setStyleSheet("font-size: 14pt;")
-            lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-            lbl.setMinimumWidth(100)
-            lbl.setWordWrap(False)
-            # elide long names to fit 150px
+            hl.setContentsMargins(6, 0, 6, 0)
+            hl.setSpacing(6)
+            hl.setSizeConstraint(QHBoxLayout.SetMinimumSize)
+            hl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            lbl = QLabel()
             fm = lbl.fontMetrics()
-            elided = fm.elidedText(base, Qt.ElideRight, 150)
-            lbl.setText(elided)
+            lbl.setText(fm.elidedText(base, Qt.ElideRight, 100))
+            lbl.setToolTip(base)
+            lbl.setStyleSheet("font-size: 14pt; padding-right: 4px;")
+            lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+            lbl.setMaximumWidth(140)
+            lbl.setWordWrap(False)
             hl.addWidget(lbl)
+            hl.addSpacing(6)
             # variant circle buttons
             for idx, geojson in enumerate(options):
                 props = geojson["features"][0]["properties"]
@@ -190,7 +182,9 @@ class RouteApp(QWidget):
                 btn.setStyleSheet(style)
                 btn.clicked.connect(lambda _, b=base, i=idx: self.on_option_selected(b,i))
                 hl.addWidget(btn)
+            hl.addStretch()
             self.route_list.addItem(item)
+            item.setText("")  # prevent default text display behind custom widget
             self.route_list.setItemWidget(item, widget)
 
     def display_route(self):
@@ -198,19 +192,16 @@ class RouteApp(QWidget):
         if not selected_items:
             return
 
-        self.selected_routes = set(item.text() for item in selected_items)
-
-        # Animate selected row widgets
+        self.selected_routes = set()
         for item in selected_items:
             widget = self.route_list.itemWidget(item)
             if widget:
-                effect = QGraphicsOpacityEffect(widget)
-                widget.setGraphicsEffect(effect)
-                anim = QPropertyAnimation(effect, b"opacity", self)
-                anim.setDuration(200)
-                anim.setStartValue(0.5)
-                anim.setEndValue(1.0)
-                anim.start()
+                label = widget.findChild(QLabel)
+                if label and label.toolTip():
+                    self.selected_routes.add(label.toolTip())
+
+        # Animation disabled for stability on macOS
+        pass
 
         # Update option label using the first selected route (not used now)
         first_base = next(iter(self.selected_routes))
@@ -232,7 +223,9 @@ class RouteApp(QWidget):
             idx = self.current_option_index.get(base, 0)
             geojson = options[idx]
             feats = geojson.get("features", [])
-            if not feats:
+            # Add check for features, geometry, coordinates
+            if not feats or "geometry" not in feats[0] or "coordinates" not in feats[0]["geometry"]:
+                print(f"Missing geometry in route: {base}")
                 continue
             coords = feats[0]["geometry"]["coordinates"]
             latlngs = [(c[1], c[0]) for c in coords]
@@ -263,7 +256,13 @@ class RouteApp(QWidget):
 
         # Save and load
         output_file = "map_preview.html"
-        m.save(output_file)
+        # Ensure file is flushed and synced before loading
+        with open(output_file, 'w', encoding='utf-8') as f:
+            html = m.get_root().render()
+            f.write(html)
+            f.flush()
+            os.fsync(f.fileno())
+        print("Loading map from:", os.path.abspath(output_file))
         self.web_view.load(QUrl.fromLocalFile(os.path.abspath(output_file)))
 
     def prev_option(self):
@@ -297,16 +296,19 @@ class RouteApp(QWidget):
                 hl = QHBoxLayout(widget)
                 hl.setContentsMargins(2,2,2,2)
                 hl.setSpacing(4)
-                lbl = QLabel(base)
-                lbl.setStyleSheet("font-size: 14pt;")
-                lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-                lbl.setMinimumWidth(100)
-                lbl.setWordWrap(False)
-                # elide long names to fit 150px
+                hl.setSizeConstraint(QHBoxLayout.SetMinimumSize)
+                hl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                lbl = QLabel()
                 fm = lbl.fontMetrics()
-                elided = fm.elidedText(base, Qt.ElideRight, 150)
+                elided = fm.elidedText(base, Qt.ElideRight, 100)
                 lbl.setText(elided)
+                lbl.setToolTip(base)
+                lbl.setStyleSheet("font-size: 14pt; padding-right: 4px;")
+                lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+                lbl.setMaximumWidth(140)
+                lbl.setWordWrap(False)
                 hl.addWidget(lbl)
+                hl.addSpacing(6)
                 # variant circle buttons
                 for idx, geojson in enumerate(options):
                     props = geojson["features"][0]["properties"]
@@ -320,7 +322,9 @@ class RouteApp(QWidget):
                     btn.setStyleSheet(style)
                     btn.clicked.connect(lambda _, b=base, i=idx: self.on_option_selected(b,i))
                     hl.addWidget(btn)
+                hl.addStretch()
                 self.route_list.addItem(item)
+                item.setText("")  # prevent default text display behind custom widget
                 self.route_list.setItemWidget(item, widget)
             self.display_route()
 
@@ -340,13 +344,26 @@ class RouteApp(QWidget):
                 continue
             idx = self.current_option_index.get(base, 0)
             geojson = options[idx]
+            # Get current display name from the QListWidget label
+            display_name = None
+            for i in range(self.route_list.count()):
+                item = self.route_list.item(i)
+                if item.text() == base:
+                    widget = self.route_list.itemWidget(item)
+                    if widget:
+                        label = widget.findChild(QLabel)
+                        if label:
+                            display_name = label.text()
+                    break
+            if not display_name:
+                display_name = base
             # Record current route name into each feature’s properties
             for feat in geojson.get("features", []):
                 feat["properties"] = feat.get("properties", {})
-                feat["properties"]["name"] = base
+                feat["properties"]["name"] = display_name
 
-            # Use route name for filename
-            filename = f"{base}.geojson"
+            # Use display name for filename
+            filename = f"{display_name}.geojson"
             file_path = os.path.join(dir_path, filename)
             try:
                 with open(file_path, "w", encoding="utf-8") as f:
@@ -377,7 +394,7 @@ class RouteApp(QWidget):
                 feat["properties"] = feat.get("properties", {})
                 feat["properties"]["color"] = hex_color
             # refresh the variant buttons color
-            self.load_json()  # reload items to update button styles
+            self.refresh_route_list()
             self.display_route()
 
     def show_route_context_menu(self, pos: QPoint):
@@ -394,17 +411,69 @@ class RouteApp(QWidget):
 
     def on_option_selected(self, base, idx):
         self.current_option_index[base] = idx
-        # Select the item in the list
+        # Highlight the active route and update styles
         for i in range(self.route_list.count()):
             item = self.route_list.item(i)
+            widget = self.route_list.itemWidget(item)
             if item.text() == base:
                 self.route_list.setCurrentItem(item)
-                break
+                if widget:
+                    widget.setStyleSheet("background-color: rgba(0,122,255,0.08); border-radius: 6px;")
+            elif widget:
+                widget.setStyleSheet("background-color: transparent;")
         self.display_route()
 
 
+    def refresh_route_list(self):
+        self.route_list.clear()
+        for base, options in self.routes.items():
+            item = QListWidgetItem(base)
+            widget = QWidget()
+            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            hl = QHBoxLayout(widget)
+            hl.setContentsMargins(6, 0, 6, 0)
+            hl.setSpacing(6)
+            hl.setSizeConstraint(QHBoxLayout.SetMinimumSize)
+            hl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+            lbl = QLabel()
+            fm = lbl.fontMetrics()
+            lbl.setText(fm.elidedText(base, Qt.ElideRight, 100))
+            lbl.setToolTip(base)
+            lbl.setStyleSheet("font-size: 14pt; padding-right: 4px;")
+            lbl.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+            lbl.setMaximumWidth(140)
+            lbl.setWordWrap(False)
+            hl.addWidget(lbl)
+
+            for idx, geojson in enumerate(options):
+                props = geojson["features"][0]["properties"]
+                color = props.get("color")
+                darker = props.get("nameColor")
+                btn = CircleButton(str(idx+1))
+                style = f"background-color: {color};"
+                if idx == self.current_option_index.get(base, 0):
+                    style += f" border: 2px solid {darker};"
+                btn.setStyleSheet(style)
+                btn.clicked.connect(lambda _, b=base, i=idx: self.on_option_selected(b,i))
+                hl.addWidget(btn)
+
+            hl.addStretch()
+            self.route_list.addItem(item)
+            item.setText("")
+            self.route_list.setItemWidget(item, widget)
+
+
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = RouteApp()
-    window.show()
-    sys.exit(app.exec_())
+    import traceback
+
+    try:
+        app = QApplication(sys.argv)
+        window = RouteApp()
+        window.show()
+        sys.exit(app.exec_())
+    except Exception as e:
+        with open("routebox_error.log", "w") as f:
+            f.write("Unhandled exception:\n")
+            traceback.print_exc(file=f)
+        raise

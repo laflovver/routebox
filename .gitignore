@@ -17,3 +17,15 @@ venv/
 # OS files
 .DS_Store
 Thumbs.db
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec
+
+# Icon assets
+*.icns
+*.iconset
+
+# Map preview outputs
+map_preview*.html
