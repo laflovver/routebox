@@ -4,12 +4,41 @@ import json
 import folium
 import random
 from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QPushButton, QListWidget,
-    QFileDialog, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QInputDialog, QColorDialog
+    QApplication, QWidget, QPushButton, 
+    QFileDialog, QHBoxLayout, QVBoxLayout, QLabel, QMessageBox, QInputDialog, QColorDialog,
+    QScrollArea, QFrame, QGraphicsDropShadowEffect, QListWidget, QListWidgetItem, QMenu,
+    QSizePolicy, QGraphicsOpacityEffect
 )
 from PyQt5.QtWebEngineWidgets import QWebEngineView
-from PyQt5.QtCore import QUrl
+from PyQt5.QtCore import QUrl, Qt, QPoint
+from PyQt5.QtCore import QPropertyAnimation, QSize
+
+class CircleButton(QPushButton):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # fixed dot size
+        self.setFixedSize(20, 20)
+        # base style, background set by caller
+        self.setStyleSheet("border-radius: 10px; font-size:10pt; color:white;")
+        # size animation
+        self._anim = QPropertyAnimation(self, b"size")
+        self._anim.setDuration(120)
+
+    def enterEvent(self, ev):
+        self._anim.stop()
+        self._anim.setStartValue(self.size())
+        self._anim.setEndValue(QSize(24, 24))
+        self._anim.start()
+        super().enterEvent(ev)
+
+    def leaveEvent(self, ev):
+        self._anim.stop()
+        self._anim.setStartValue(self.size())
+        self._anim.setEndValue(QSize(20, 20))
+        self._anim.start()
+        super().leaveEvent(ev)
 
 from logic import extract_route
 
@@ -23,8 +52,18 @@ class RouteApp(QWidget):
         self.routes = {}
         # current selected option per base filename
         self.current_option_index = {}
+        self.selected_routes = set()
 
         self.init_ui()
+
+        # Apply global modern macOS-style stylesheet
+        self.setStyleSheet("""
+            QWidget { background-color: #F2F2F5; font-family: Menlo, Monaco, Consolas, "Courier New", monospace; }
+            QPushButton { background-color: #FFFFFF; border: none; border-radius: 8px; padding: 8px 12px; color: #000000; }
+            QPushButton:hover { background-color: #E5E5EA; }
+            QLabel { color: #1C1C1E; font-size: 13px; }
+            QScrollArea { background: transparent; border: none; }
+        """)
 
     def init_ui(self):
         layout = QHBoxLayout(self)
@@ -36,26 +75,36 @@ class RouteApp(QWidget):
         self.load_button.clicked.connect(self.load_json)
         left_panel.addWidget(self.load_button)
 
+        # Route list slots
         self.route_list = QListWidget()
-        # allow multi-selection of routes
+        self.route_list.setSpacing(4)
+        self.route_list.setStyleSheet(
+            "QListWidget { padding: 4px; }"
+            "QListWidget::item {"
+            "  margin: 2px 0;"
+            "  height: 32px;"
+            "  font-size: 14pt;"
+            "  border-radius: 4px;"
+            "}"
+            "QListWidget::item:hover {"
+            "  background-color: #E5E5EA;"
+            "}"
+            "QListWidget::item:pressed {"
+            "  background-color: #C7C7CC;"
+            "}"
+            "QListWidget::item:selected {"
+            "  background-color: #007AFF;"
+            "  color: white;"
+            "}"
+        )
         self.route_list.setSelectionMode(QListWidget.ExtendedSelection)
-        # update display when selection changes
         self.route_list.itemSelectionChanged.connect(self.display_route)
-        self.route_list.currentItemChanged.connect(self.display_route)
         self.route_list.itemDoubleClicked.connect(self.rename_route)
+        self.route_list.itemActivated.connect(self.rename_route)
+        # enable custom context menu
+        self.route_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.route_list.customContextMenuRequested.connect(self.show_route_context_menu)
         left_panel.addWidget(self.route_list)
-
-        # Option navigation
-        self.prev_button = QPushButton("Prev Option")
-        self.prev_button.clicked.connect(self.prev_option)
-        left_panel.addWidget(self.prev_button)
-
-        self.option_label = QLabel("Option: -")
-        left_panel.addWidget(self.option_label)
-
-        self.next_button = QPushButton("Next Option")
-        self.next_button.clicked.connect(self.next_option)
-        left_panel.addWidget(self.next_button)
 
         self.rename_button = QPushButton("Rename Route")
         self.rename_button.clicked.connect(self.rename_route)
@@ -95,38 +144,88 @@ class RouteApp(QWidget):
                 self.current_option_index[base] = 0
                 # assign random color and darker NameColor to each option
                 for geojson in geojson_list:
-                    color = "#{:06x}".format(random.randint(0, 0xFFFFFF))
-                    darker = QColor(color).darker(120).name()
+                    # generate maximally contrasting vivid color
+                    hue = random.randint(0, 359)
+                    color = QColor.fromHsv(hue, 255, 255).name()
+                    # darker shade for border
+                    darker = QColor.fromHsv(hue, 255, 180).name()
                     for feat in geojson.get("features", []):
                         props = feat.setdefault("properties", {})
                         props["color"] = color
                         props["nameColor"] = darker
-                self.route_list.addItem(base)
                 total_loaded += len(geojson_list)
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to load {file_path}:\n{str(e)}")
 
         self.status.setText(f"Loaded {total_loaded} route(s)")
+        self.route_list.clear()
+        for base, options in self.routes.items():
+            item = QListWidgetItem(base)
+            # create widget container
+            widget = QWidget()
+            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            hl = QHBoxLayout(widget)
+            hl.setContentsMargins(2,2,2,2)
+            hl.setSpacing(4)
+            lbl = QLabel(base)
+            lbl.setStyleSheet("font-size: 14pt;")
+            lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+            lbl.setMinimumWidth(100)
+            lbl.setWordWrap(False)
+            # elide long names to fit 150px
+            fm = lbl.fontMetrics()
+            elided = fm.elidedText(base, Qt.ElideRight, 150)
+            lbl.setText(elided)
+            hl.addWidget(lbl)
+            # variant circle buttons
+            for idx, geojson in enumerate(options):
+                props = geojson["features"][0]["properties"]
+                color = props.get("color")
+                darker = props.get("nameColor")
+                btn = CircleButton(str(idx+1))
+                # style circle; highlight active variant with border
+                style = f"background-color: {color};"
+                if idx == self.current_option_index.get(base, 0):
+                    style += f" border: 2px solid {darker};"
+                btn.setStyleSheet(style)
+                btn.clicked.connect(lambda _, b=base, i=idx: self.on_option_selected(b,i))
+                hl.addWidget(btn)
+            self.route_list.addItem(item)
+            self.route_list.setItemWidget(item, widget)
 
     def display_route(self):
-        items = self.route_list.selectedItems()
-        if not items:
+        selected_items = self.route_list.selectedItems()
+        if not selected_items:
             return
 
-        # Update option label using the first selected route
-        first_base = items[0].text()
+        self.selected_routes = set(item.text() for item in selected_items)
+
+        # Animate selected row widgets
+        for item in selected_items:
+            widget = self.route_list.itemWidget(item)
+            if widget:
+                effect = QGraphicsOpacityEffect(widget)
+                widget.setGraphicsEffect(effect)
+                anim = QPropertyAnimation(effect, b"opacity", self)
+                anim.setDuration(200)
+                anim.setStartValue(0.5)
+                anim.setEndValue(1.0)
+                anim.start()
+
+        # Update option label using the first selected route (not used now)
+        first_base = next(iter(self.selected_routes))
         first_options = self.routes.get(first_base, [])
         if first_options:
             idx_first = self.current_option_index.get(first_base, 0)
-            self.option_label.setText(f"Option: {idx_first+1} of {len(first_options)}")
+            # self.option_label.setText(f"Option: {idx_first+1} of {len(first_options)}")
         else:
-            self.option_label.setText("Option: -")
+            pass
+            # self.option_label.setText("Option: -")
 
         # Draw all selected routes on one map
         all_points = []
         routes_data = []
-        for item in items:
-            base = item.text()
+        for base in self.selected_routes:
             options = self.routes.get(base, [])
             if not options:
                 continue
@@ -168,43 +267,65 @@ class RouteApp(QWidget):
         self.web_view.load(QUrl.fromLocalFile(os.path.abspath(output_file)))
 
     def prev_option(self):
-        item = self.route_list.currentItem()
-        if not item:
-            return
-        base = item.text()
-        count = len(self.routes.get(base, []))
-        if count < 2:
-            return
-        idx = (self.current_option_index[base] - 1) % count
-        self.current_option_index[base] = idx
-        self.display_route()
+        # Not used now
+        pass
 
     def next_option(self):
-        item = self.route_list.currentItem()
-        if not item:
-            return
-        base = item.text()
-        count = len(self.routes.get(base, []))
-        if count < 2:
-            return
-        idx = (self.current_option_index[base] + 1) % count
-        self.current_option_index[base] = idx
-        self.display_route()
+        # Not used now
+        pass
 
     def rename_route(self):
-        item = self.route_list.currentItem()
-        if not item:
+        if not self.selected_routes:
             return
-        old_name = item.text()
+        # Only rename first selected route
+        base = next(iter(self.selected_routes))
+        old_name = base
         new_name, ok = QInputDialog.getText(self, "Rename Route", "Enter new name:", text=old_name)
         if ok and new_name and new_name != old_name:
             self.routes[new_name] = self.routes.pop(old_name)
             self.current_option_index[new_name] = self.current_option_index.pop(old_name)
-            item.setText(new_name)
+            if old_name in self.selected_routes:
+                self.selected_routes.remove(old_name)
+                self.selected_routes.add(new_name)
+            # Update list widget
+            self.route_list.clear()
+            for base, options in self.routes.items():
+                item = QListWidgetItem(base)
+                # create widget container
+                widget = QWidget()
+                widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                hl = QHBoxLayout(widget)
+                hl.setContentsMargins(2,2,2,2)
+                hl.setSpacing(4)
+                lbl = QLabel(base)
+                lbl.setStyleSheet("font-size: 14pt;")
+                lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+                lbl.setMinimumWidth(100)
+                lbl.setWordWrap(False)
+                # elide long names to fit 150px
+                fm = lbl.fontMetrics()
+                elided = fm.elidedText(base, Qt.ElideRight, 150)
+                lbl.setText(elided)
+                hl.addWidget(lbl)
+                # variant circle buttons
+                for idx, geojson in enumerate(options):
+                    props = geojson["features"][0]["properties"]
+                    color = props.get("color")
+                    darker = props.get("nameColor")
+                    btn = CircleButton(str(idx+1))
+                    # style circle; highlight active variant with border
+                    style = f"background-color: {color};"
+                    if idx == self.current_option_index.get(base, 0):
+                        style += f" border: 2px solid {darker};"
+                    btn.setStyleSheet(style)
+                    btn.clicked.connect(lambda _, b=base, i=idx: self.on_option_selected(b,i))
+                    hl.addWidget(btn)
+                self.route_list.addItem(item)
+                self.route_list.setItemWidget(item, widget)
+            self.display_route()
 
     def export_route(self):
-        items = self.route_list.selectedItems()
-        if not items:
+        if not self.selected_routes:
             return
 
         # Ask user to select an export directory
@@ -213,8 +334,7 @@ class RouteApp(QWidget):
             return
 
         exported = 0
-        for item in items:
-            base = item.text()
+        for base in self.selected_routes:
             options = self.routes.get(base, [])
             if not options:
                 continue
@@ -238,24 +358,49 @@ class RouteApp(QWidget):
         QMessageBox.information(self, "Export Complete", f"Exported {exported} route(s) to:\n{dir_path}")
 
     def choose_color(self):
-        item = self.route_list.currentItem()
-        if not item:
+        if not self.selected_routes:
             return
-        base = item.text()
+        # Only use first selected route
+        base = next(iter(self.selected_routes))
+        self.choose_color_for_base(base)
+
+    def choose_color_for_base(self, base):
         options = self.routes.get(base, [])
         if not options:
             return
         idx = self.current_option_index.get(base, 0)
         geojson = options[idx]
-
         color = QColorDialog.getColor()
         if color.isValid():
             hex_color = color.name()
-            if geojson.get("type") == "FeatureCollection":
-                for feat in geojson.get("features", []):
-                    feat["properties"] = feat.get("properties", {})
-                    feat["properties"]["color"] = hex_color
+            for feat in geojson.get("features", []):
+                feat["properties"] = feat.get("properties", {})
+                feat["properties"]["color"] = hex_color
+            # refresh the variant buttons color
+            self.load_json()  # reload items to update button styles
             self.display_route()
+
+    def show_route_context_menu(self, pos: QPoint):
+        item = self.route_list.itemAt(pos)
+        if not item:
+            return
+        base = item.text()
+        menu = QMenu(self)
+        color_action = menu.addAction("Change Route Color")
+        action = menu.exec_(self.route_list.viewport().mapToGlobal(pos))
+        if action == color_action:
+            # call choose_color for this route
+            self.choose_color_for_base(base)
+
+    def on_option_selected(self, base, idx):
+        self.current_option_index[base] = idx
+        # Select the item in the list
+        for i in range(self.route_list.count()):
+            item = self.route_list.item(i)
+            if item.text() == base:
+                self.route_list.setCurrentItem(item)
+                break
+        self.display_route()
 
 
 if __name__ == "__main__":
