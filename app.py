@@ -77,6 +77,8 @@ class RouteApp(QWidget):
             QListWidget::item:selected {
                 background-color: #007AFF;
                 color: white;
+                font-weight: bold;
+                border: 1px solid #004080;
             }
             QListWidget::item:focus {
                 outline: none;
@@ -204,7 +206,10 @@ class RouteApp(QWidget):
         pass
 
         # Update option label using the first selected route (not used now)
-        first_base = next(iter(self.selected_routes))
+        try:
+            first_base = next(iter(self.selected_routes))
+        except StopIteration:
+            return
         first_options = self.routes.get(first_base, [])
         if first_options:
             idx_first = self.current_option_index.get(first_base, 0)
@@ -348,13 +353,12 @@ class RouteApp(QWidget):
             display_name = None
             for i in range(self.route_list.count()):
                 item = self.route_list.item(i)
-                if item.text() == base:
-                    widget = self.route_list.itemWidget(item)
-                    if widget:
-                        label = widget.findChild(QLabel)
-                        if label:
-                            display_name = label.text()
-                    break
+                widget = self.route_list.itemWidget(item)
+                if widget:
+                    label = widget.findChild(QLabel)
+                    if label and label.toolTip() == base:
+                        display_name = label.text()
+                        break
             if not display_name:
                 display_name = base
             # Record current route name into each feature’s properties
@@ -390,11 +394,15 @@ class RouteApp(QWidget):
         color = QColorDialog.getColor()
         if color.isValid():
             hex_color = color.name()
+            # also compute darker color for nameColor
+            darker_color = QColor.fromHsv(color.hue(), color.saturation(), 180).name()
             for feat in geojson.get("features", []):
                 feat["properties"] = feat.get("properties", {})
                 feat["properties"]["color"] = hex_color
-            # refresh the variant buttons color
-            self.refresh_route_list()
+                feat["properties"]["nameColor"] = darker_color
+            # refresh the variant buttons color, but only if method exists
+            if hasattr(self, "refresh_route_list"):
+                self.refresh_route_list()
             self.display_route()
 
     def show_route_context_menu(self, pos: QPoint):
@@ -411,16 +419,16 @@ class RouteApp(QWidget):
 
     def on_option_selected(self, base, idx):
         self.current_option_index[base] = idx
-        # Highlight the active route and update styles
+        # Ensure the selected item visually matches selection state
         for i in range(self.route_list.count()):
             item = self.route_list.item(i)
             widget = self.route_list.itemWidget(item)
-            if item.text() == base:
+            label = widget.findChild(QLabel) if widget else None
+            if label and label.toolTip() == base:
                 self.route_list.setCurrentItem(item)
-                if widget:
-                    widget.setStyleSheet("background-color: rgba(0,122,255,0.08); border-radius: 6px;")
-            elif widget:
-                widget.setStyleSheet("background-color: transparent;")
+                item.setSelected(True)
+            else:
+                item.setSelected(False)
         self.display_route()
 
 
@@ -461,6 +469,9 @@ class RouteApp(QWidget):
             hl.addStretch()
             self.route_list.addItem(item)
             item.setText("")
+            # Restore selection state if base is in self.selected_routes
+            if base in self.selected_routes:
+                item.setSelected(True)
             self.route_list.setItemWidget(item, widget)
 
 
