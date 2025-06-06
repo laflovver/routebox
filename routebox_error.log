@@ -1,0 +1,11 @@
+Unhandled exception:
+Traceback (most recent call last):
+  File "/Users/yauhenitabolich/routebox/app.py", line 429, in <module>
+    window = RouteApp()
+  File "/Users/yauhenitabolich/routebox/app.py", line 37, in __init__
+    self.init_ui()
+    ~~~~~~~~~~~~^^
+  File "/Users/yauhenitabolich/routebox/app.py", line 95, in init_ui
+    self.route_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                                               ^^
+NameError: name 'Qt' is not defined

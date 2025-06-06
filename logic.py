@@ -1,6 +1,8 @@
 import json
 
 def extract_route(data, return_all=False, route_index=None, route_name=None):
+    if not isinstance(data, dict):
+        raise ValueError("Input data must be a dictionary")
     routes = data.get("routes", [])
     if not routes:
         return None
@@ -21,11 +23,24 @@ def extract_route(data, return_all=False, route_index=None, route_name=None):
         coords = []
         for leg in route.get("legs", []):
             for step in leg.get("steps", []):
-                geom = step.get("geometry", {})
-                if geom.get("type") == "LineString":
-                    coords.extend(geom.get("coordinates", []))
+                geom = step.get("geometry")
+                if not isinstance(geom, dict):
+                    print(f"[DEBUG] Geometry is not a dict or missing: {step}")
+                    continue
+                if geom.get("type") == "LineString" and isinstance(geom.get("coordinates"), list):
+                    coords.extend(geom["coordinates"])
+                else:
+                    print(f"[DEBUG] Unexpected geometry format in step: {step}")
+
+        # fallback to full route geometry if steps are missing
+        if not coords and route.get("geometry", {}).get("type") == "LineString":
+            coords = route["geometry"]["coordinates"]
 
         name = route_name or (f"route_{i+1}" if len(selected_routes) > 1 else "route")
+
+        if not coords:
+            print(f"[WARNING] No coordinates collected for route {name}")
+
         feature = {
             "type": "Feature",
             "geometry": {"type": "LineString", "coordinates": coords},
